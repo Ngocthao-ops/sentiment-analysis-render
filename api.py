@@ -2,12 +2,12 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import pickle
 import numpy as np
-import time  # ← THÊM ĐỂ ĐO THỜI GIAN
+import time  
 
 app = Flask(__name__)
-CORS(app)  # Cho phép Dash app gọi API
+CORS(app)  
 
-# Load models và vectorizer
+# Load models, vectorizer
 print("Loading models...")
 with open('models/logistic_model.pkl', 'rb') as f:
     logistic_model = pickle.load(f)
@@ -18,7 +18,32 @@ with open('models/random_forest_model.pkl', 'rb') as f:
 with open('models/vectorizer.pkl', 'rb') as f:
     vectorizer = pickle.load(f)
 
-print("Tải model thành công!")
+    
+try:
+    print("Đang load CNN-LSTM...")
+    from tensorflow import keras
+    import tensorflow as tf
+    from tensorflow.keras.preprocessing.sequence import pad_sequences
+    import pickle as pkl
+    
+    # Load CNN-LSTM
+    cnn_lstm_model = keras.models.load_model('models/cnn_lstm_model.h5')
+    print(f"Load model thành công! Input shape: {cnn_lstm_model.input_shape}, Output shape: {cnn_lstm_model.output_shape}")
+    
+    # Load tokenizer CNN-LSTM
+    with open('models/tokenizer.pkl', 'rb') as f:
+        tokenizer = pkl.load(f)
+    print(f"Load tokenizer thành công!")
+    
+    cnn_lstm_available = True
+    
+except Exception as e:
+    print(f"Xem lại model CNN-LSTM: {e}")
+    import traceback
+    traceback.print_exc()
+    cnn_lstm_available = False
+
+print(f"Tải model thành công! CNN-LSTM available: {cnn_lstm_available}")
 
 def map_prediction_to_sentiment(prediction):
     sentiment_map = {
@@ -39,12 +64,13 @@ def map_prediction_to_sentiment(prediction):
         }
     }
     
-    return sentiment_map.get(prediction, sentiment_map[0])  # Default: neutral
+    return sentiment_map.get(prediction, sentiment_map[0])  
 
 @app.route('/')
 def home():
     return jsonify({
         'status': 'API is running',
+        'cnn_lstm_available': cnn_lstm_available,
         'endpoints': {
             'predict': '/api/predict (POST)',
             'compare': '/api/compare (POST)',
@@ -55,16 +81,19 @@ def home():
 @app.route('/api/health', methods=['GET'])
 def health():
     """Check API health"""
-    return jsonify({'status': 'healthy', 'models_loaded': True})
+    return jsonify({
+        'status': 'healthy', 
+        'models_loaded': True,
+        'cnn_lstm_available': cnn_lstm_available
+    })
 
 @app.route('/api/predict', methods=['POST'])
 def predict():
     """
-    Predict sentiment from Vietnamese text
-    Expects JSON: {"text": "review text", "model": "logistic" or "random_forest"}
+    Dự đoán: {"text": "review text", "model": "logistic" or "random_forest"}
     """
     try:
-        start_time = time.time()  # ← BẮT ĐẦU ĐO THỜI GIAN
+        start_time = time.time()
         
         data = request.get_json()
         
@@ -76,7 +105,7 @@ def predict():
         if not text or text.strip() == '':
             return jsonify({'error': 'Text is empty'}), 400
         
-        model_choice = data.get('model', 'logistic')  # Default: logistic
+        model_choice = data.get('model', 'logistic')  
         
         # Vectorize
         text_vector = vectorizer.transform([text])
@@ -113,8 +142,8 @@ def predict():
         else:
             probabilities = {}
         
-        end_time = time.time()  # ← KẾT THÚC ĐO THỜI GIAN
-        prediction_time = round((end_time - start_time) * 1000, 2)  # ms
+        end_time = time.time()
+        prediction_time = round((end_time - start_time) * 1000, 2)
         
         return jsonify({
             'text': text,
@@ -126,18 +155,23 @@ def predict():
             'model_used': model_name,
             'probabilities': probabilities,
             'num_classes': len(proba),
-            'prediction_time_ms': prediction_time  # ← THÊM THỜI GIAN
+            'prediction_time_ms': prediction_time
         })
         
     except Exception as e:
         return jsonify({'error': str(e)}), 500
-
-@app.route('/api/compare', methods=['POST'])
-def compare_models():
+    
+@app.route('/api/predict_cnn_lstm', methods=['POST'])
+def predict_cnn_lstm():
     """
-    So sánh kết quả 2 models
+     CNN-LSTM model
     """
+    if not cnn_lstm_available:  
+        return jsonify({'error': 'CNN-LSTM model not available'}), 503
+    
     try:
+        start_time = time.time()
+        
         data = request.get_json()
         
         if not data or 'text' not in data:
@@ -148,22 +182,154 @@ def compare_models():
         if not text or text.strip() == '':
             return jsonify({'error': 'Text is empty'}), 400
         
-        # Vectorize
+        # Tokenize và pad sequence
+        sequences = tokenizer.texts_to_sequences([text])
+        padded = pad_sequences(sequences, maxlen=82, padding='post', truncating='post')
+        
+        # Predict
+        prediction = cnn_lstm_model.predict(padded, verbose=0)[0]
+        
+        # Chuyển đổi prediction thành class
+        pred_class = np.argmax(prediction) - 1  # -1, 0, 1
+        
+        # Map prediction
+        sentiment_info = map_prediction_to_sentiment(int(pred_class))
+        
+        # Get confidence
+        confidence = float(max(prediction))
+        
+        # Build probabilities dict
+        probabilities = {
+            'negative': round(float(prediction[0]) * 100, 2),
+            'neutral': round(float(prediction[1]) * 100, 2),
+            'positive': round(float(prediction[2]) * 100, 2)
+        }
+        
+        end_time = time.time()
+        prediction_time = round((end_time - start_time) * 1000, 2)
+        
+        return jsonify({
+            'text': text,
+            'prediction': int(pred_class),
+            'rating': sentiment_info['rating'],
+            'sentiment': sentiment_info['label'],
+            'sentiment_en': sentiment_info['label_en'],
+            'confidence': round(confidence * 100, 2),
+            'model_used': 'CNN-LSTM',
+            'probabilities': probabilities,
+            'prediction_time_ms': prediction_time
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/compare', methods=['POST'])
+def compare_models():
+    """
+    So sánh 3 models
+    """
+    try:
+        print("\n" + "="*60)
+        print("Nhận request /api/compare")
+        
+        data = request.get_json()
+        
+        if not data or 'text' not in data:
+            return jsonify({'error': 'No text provided'}), 400
+        
+        text = data['text']
+        print(f"Text: '{text}'")
+        
+        if not text or text.strip() == '':
+            return jsonify({'error': 'Text is empty'}), 400
+        
+        # Vectorize cho traditional models
+        print("\nVectorizing...")
         text_vector = vectorizer.transform([text])
+        print("Vectorize xong")
         
         # Logistic Regression
+        print("\nLogistic Regression...")
         start_log = time.time()
         log_pred = logistic_model.predict(text_vector)[0]
         log_proba = logistic_model.predict_proba(text_vector)[0]
         log_time = round((time.time() - start_log) * 1000, 2)
         log_sentiment = map_prediction_to_sentiment(int(log_pred))
+        print(f"Result: {log_sentiment['label']} ({log_time}ms)")
         
         # Random Forest
+        print("\n🌲 Random Forest...")
         start_rf = time.time()
         rf_pred = rf_model.predict(text_vector)[0]
         rf_proba = rf_model.predict_proba(text_vector)[0]
         rf_time = round((time.time() - start_rf) * 1000, 2)
         rf_sentiment = map_prediction_to_sentiment(int(rf_pred))
+        print(f"Result: {rf_sentiment['label']} ({rf_time}ms)")
+        
+        # CNN-LSTM
+        cnn_lstm_result = None
+        print(f"\nCNN-LSTM available: {cnn_lstm_available}")
+        
+        if cnn_lstm_available:
+            try:
+                print("Bắt đầu CNN-LSTM prediction...")
+                start_cnn = time.time()
+                
+                # Tokenize
+                print(f"  → Tokenizing text: '{text}'")
+                sequences = tokenizer.texts_to_sequences([text])
+                print(f"  → Sequences: {sequences}")
+                print(f"  → Sequence length: {len(sequences[0]) if sequences and sequences[0] else 0}")
+                
+                # Pad
+                padded = pad_sequences(sequences, maxlen=82, padding='post', truncating='post')
+                print(f"  → Padded shape: {padded.shape}")
+                print(f"  → Padded content (first 20): {padded[0][:20]}")
+                
+                # Predict
+                print("  → Calling model.predict()...")
+                cnn_pred_proba = cnn_lstm_model.predict(padded, verbose=0)[0]
+                print(f"  → Raw output: {cnn_pred_proba}")
+                print(f"  → Output type: {type(cnn_pred_proba)}")
+                print(f"  → Output shape: {cnn_pred_proba.shape if hasattr(cnn_pred_proba, 'shape') else len(cnn_pred_proba)}")
+                
+                # Xác định class
+                print("  → Determining class...")
+                pred_idx = np.argmax(cnn_pred_proba)
+                print(f"  → Argmax index: {pred_idx}")
+                
+                cnn_pred = pred_idx - 1  # Convert to -1, 0, 1
+                print(f"  → Mapped class: {cnn_pred}")
+                
+                cnn_time = round((time.time() - start_cnn) * 1000, 2)
+                cnn_sentiment = map_prediction_to_sentiment(int(cnn_pred))
+                print(f"  → Sentiment: {cnn_sentiment}")
+                
+                cnn_lstm_result = {
+                    'rating': cnn_sentiment['rating'],
+                    'sentiment': cnn_sentiment['label'],
+                    'sentiment_en': cnn_sentiment['label_en'],
+                    'confidence': round(float(max(cnn_pred_proba)) * 100, 2),
+                    'probabilities': {
+                        'negative': round(float(cnn_pred_proba[0]) * 100, 2),
+                        'neutral': round(float(cnn_pred_proba[1]) * 100, 2),
+                        'positive': round(float(cnn_pred_proba[2]) * 100, 2)
+                    },
+                    'prediction_time_ms': cnn_time
+                }
+                print(f"CNN-LSTM complete: {cnn_sentiment['label']} ({cnn_time}ms)")
+                print(f"   Result object: {cnn_lstm_result}")
+                
+            except Exception as e:
+                print(f"\nCNN-LSTM ERROR:")
+                print(f"   Type: {type(e).__name__}")
+                print(f"   Message: {e}")
+                import traceback
+                print("   Traceback:")
+                traceback.print_exc()
+                cnn_lstm_result = None
+        else:
+            print("CNN-LSTM not available (model not loaded)")
         
         # Build probabilities
         if len(log_proba) == 3:
@@ -190,7 +356,8 @@ def compare_models():
                 'positive': round(float(rf_proba[1]) * 100, 2)
             }
         
-        return jsonify({
+        print("\n Building response...")
+        result = {
             'text': text,
             'logistic_regression': {
                 'rating': log_sentiment['rating'],
@@ -198,7 +365,7 @@ def compare_models():
                 'sentiment_en': log_sentiment['label_en'],
                 'confidence': round(float(max(log_proba)) * 100, 2),
                 'probabilities': log_probs,
-                'prediction_time_ms': log_time  # ← THÊM THỜI GIAN
+                'prediction_time_ms': log_time
             },
             'random_forest': {
                 'rating': rf_sentiment['rating'],
@@ -206,12 +373,29 @@ def compare_models():
                 'sentiment_en': rf_sentiment['label_en'],
                 'confidence': round(float(max(rf_proba)) * 100, 2),
                 'probabilities': rf_probs,
-                'prediction_time_ms': rf_time  # ← THÊM THỜI GIAN
+                'prediction_time_ms': rf_time
             }
-        })
+        }
+        
+        # Thêm CNN-LSTM
+        if cnn_lstm_result is not None:
+            result['cnn_lstm'] = cnn_lstm_result
+            print(f"Added CNN-LSTM to response")
+        else:
+            print(f"CNN-LSTM result is None, NOT adding to response")
+        
+        print(f"\n Response ready! Keys: {list(result.keys())}")
+        print("="*60 + "\n")
+        
+        return jsonify(result)
         
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        print(f"\n CRITICAL ERROR in /api/compare:")
+        print(f"   Type: {type(e).__name__}")
+        print(f"   Message: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500        
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
