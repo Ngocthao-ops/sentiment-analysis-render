@@ -11,7 +11,7 @@ app = dash.Dash(
     update_title=None 
 )
 
-API_URL = os.getenv('API_URL', 'http://localhost:5000/api')
+API_URL = "/api"
 
 # Layout
 app.layout = html.Div([
