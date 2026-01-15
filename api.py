@@ -258,7 +258,7 @@ def compare_models():
         print(f"Result: {log_sentiment['label']} ({log_time}ms)")
         
         # Random Forest
-        print("\n🌲 Random Forest...")
+        print("\nRandom Forest...")
         start_rf = time.time()
         rf_pred = rf_model.predict(text_vector)[0]
         rf_proba = rf_model.predict_proba(text_vector)[0]
@@ -397,5 +397,34 @@ def compare_models():
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500        
 
+# TÍCH HỢP DASH APP VÀO FLASK
+try:
+    from app import app as dash_app
+    
+    # Mount Dash vào Flask tại đường dẫn /dash/
+    from werkzeug.middleware.dispatcher import DispatcherMiddleware
+    from werkzeug.serving import run_simple
+    
+    # Tạo application tích hợp
+    application = DispatcherMiddleware(app, {
+        '/dash': dash_app.server
+    })
+    
+    print("Dash app đã được tích hợp tại /dash/")
+    DASH_INTEGRATED = True
+except Exception as e:
+    print(f"Không thể tích hợp Dash: {e}")
+    application = app
+    DASH_INTEGRATED = False
+
+# MAIN
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    import os
+    port = int(os.environ.get('PORT', 5000))
+    
+    if DASH_INTEGRATED:
+        # Chạy với Dash tích hợp
+        run_simple('0.0.0.0', port, application, use_reloader=False, use_debugger=False)
+    else:
+        # Chạy Flask only
+        app.run(host='0.0.0.0', port=port, debug=False)
