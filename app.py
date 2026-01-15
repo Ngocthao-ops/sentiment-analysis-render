@@ -450,7 +450,8 @@ def create_result_table(result):
         ], style={'backgroundColor': '#FFFFFF'})
     ], className='mt-4', style={'boxShadow': '0 8px 16px rgba(0,0,0,0.2)', 'border': 'none', 'borderRadius': '15px', 'overflow': 'hidden'})
 
+# Expose server cho production
 server = app.server
 
 if __name__ == '__main__':
-    app.run_server(debug=True, host='0.0.0.0', port=8050)
+    app.run_server(debug=True, port=8050)
