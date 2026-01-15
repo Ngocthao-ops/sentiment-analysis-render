@@ -11,7 +11,7 @@ app = dash.Dash(
     update_title=None 
 )
 
-API_URL = "/api"
+API_URL = os.getenv('API_URL', 'https://sentiment-analysis-render.onrender.com/api')
 
 # Layout
 app.layout = html.Div([
